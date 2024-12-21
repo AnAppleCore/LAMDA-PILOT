@@ -191,8 +191,9 @@ def _train(args:dict):
                 np_acctable[idxx, :idxy] = np.array(line)
             np_acctable = np_acctable.T
             forgetting = np.mean((np.max(np_acctable, axis=1) - np_acctable[:, task])[:task])
-            print('Accuracy Matrix (CNN):')
-            print(np_acctable)
+            # print('Accuracy Matrix (CNN):')
+            # print(np_acctable)
+            logging.info('Accuracy Matrix (CNN): {}'.format(np_acctable))
             logging.info('Forgetting (CNN): {}'.format(forgetting))
         if len(nme_matrix) > 0:
             np_acctable = np.zeros([task + 1, task + 1])
@@ -201,9 +202,10 @@ def _train(args:dict):
                 np_acctable[idxx, :idxy] = np.array(line)
             np_acctable = np_acctable.T
             forgetting = np.mean((np.max(np_acctable, axis=1) - np_acctable[:, task])[:task])
-            print('Accuracy Matrix (NME):')
-            print(np_acctable)
-        logging.info('Forgetting (NME): {}'.format(forgetting))
+            # print('Accuracy Matrix (NME):')
+            # print(np_acctable)
+            logging.info('Accuracy Matrix (NME): {}'.format(np_acctable))
+            logging.info('Forgetting (NME): {}'.format(forgetting))
 
         # report domain wise accuracy matrix and forgetting
         if use_multi_domain_dataset(args["dataset"]):
@@ -216,9 +218,9 @@ def _train(args:dict):
                         np_acctable[idxx, :idxy] = np.array(line)
                     np_acctable = np_acctable.T
                     forgetting = np.mean((np.max(np_acctable, axis=1) - np_acctable[:, task])[:task])
-                    print('Domain {}: Accuracy Matrix (CNN):'.format(domain_name))
-                    print(np_acctable)
-                    print('Domain {}: Forgetting (CNN):'.format(domain_name), forgetting)
+                    # print('Domain {}: Accuracy Matrix (CNN):'.format(domain_name))
+                    # print(np_acctable)
+                    logging.info('Domain {}: Accuracy Matrix (CNN): {}'.format(domain_name, np_acctable))
                     logging.info('Domain {}: Forgetting (CNN): {}'.format(domain_name, forgetting))
                 nme_matrix = nme_matrix_per_domain[domain_name]
                 if len(nme_matrix)>0:
@@ -228,9 +230,9 @@ def _train(args:dict):
                         np_acctable[idxx, :idxy] = np.array(line)
                     np_acctable = np_acctable.T
                     forgetting = np.mean((np.max(np_acctable, axis=1) - np_acctable[:, task])[:task])
-                    print('Domain {}: Accuracy Matrix (NME):'.format(domain_name))
-                    print(np_acctable)
-                    print('Domain {}: Forgetting (NME):'.format(domain_name), forgetting)
+                    # print('Domain {}: Accuracy Matrix (NME):'.format(domain_name))
+                    # print(np_acctable)
+                    logging.info('Domain {}: Accuracy Matrix (NME): {}'.format(domain_name, np_acctable))
                     logging.info('Domain {}: Forgetting (NME): {}'.format(domain_name, forgetting))
 
 
