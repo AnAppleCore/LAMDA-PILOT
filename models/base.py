@@ -1,9 +1,13 @@
+import os
+from typing import Union
 import copy
 import logging
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from utils.data_manager import DataManager
+from utils.domain_data_manager import DomainDataManager
 from utils.toolkit import tensor2numpy, accuracy
 from scipy.spatial.distance import cdist
 
@@ -15,10 +19,11 @@ class BaseLearner(object):
         self._cur_task = -1
         self._known_classes = 0
         self._total_classes = 0
+        self._class_id_pairs = []
         self._network = None
         self._old_network = None
         self._data_memory, self._targets_memory = np.array([]), np.array([])
-        self.topk = 5
+        self.topk = min(5, args["init_cls"])
 
         self._memory_size = args["memory_size"]
         self._memory_per_class = args.get("memory_per_class", None)
@@ -26,6 +31,8 @@ class BaseLearner(object):
         self._device = args["device"][0]
         self._multiple_gpus = args["device"]
         self.args = args
+
+        self.test_loader = None
 
     @property
     def exemplar_size(self):
@@ -48,6 +55,17 @@ class BaseLearner(object):
             return self._network.module.feature_dim
         else:
             return self._network.feature_dim
+
+    def register_data_info(self, data_manager: Union[DataManager, DomainDataManager] = None):
+        start_class_id = 0
+        end_class_id = -1
+        for _increment in data_manager._increments:
+            start_class_id = end_class_id + 1
+            end_class_id += _increment
+            self._class_id_pairs.append((start_class_id, end_class_id))
+
+        # For later use, e.g., computing domain-wise task accuracy
+        self.data_manager = data_manager
     
     def build_rehearsal_memory(self, data_manager, per_class):
         if self._fixed_memory:
@@ -123,6 +141,30 @@ class BaseLearner(object):
             nme_accy = None
 
         return cnn_accy, nme_accy
+    
+    def eval_task_per_domain(self):
+        cnn_accy_per_domain = {}
+        nme_accy_per_domain = {}
+        for domain_id, domain_name in enumerate(self.data_manager.domain_names):
+            domain_test_loader = self.get_domain_test_loader(domain_id)
+            y_pred, y_true = self._eval_cnn(domain_test_loader)
+            cnn_accy_per_domain[domain_name] = self._evaluate(y_pred, y_true)
+            if hasattr(self, "_class_means"):
+                y_pred, y_true = self._eval_nme(domain_test_loader, self._class_means)
+                nme_accy_per_domain[domain_name] = self._evaluate(y_pred, y_true)
+            else:
+                nme_accy_per_domain[domain_name] = None
+
+        return cnn_accy_per_domain, nme_accy_per_domain
+    
+    def get_domain_test_loader(self, domain_id):
+        domain_test_dataset = self.data_manager.get_domain_dataset(
+            np.arange(0, self._total_classes), source="test", mode="test", domain_id=domain_id,
+        )
+        domain_test_loader = DataLoader(
+            domain_test_dataset, batch_size=batch_size, shuffle=False, num_workers=4
+        )
+        return domain_test_loader
 
     def incremental_train(self):
         pass
@@ -207,6 +249,10 @@ class BaseLearner(object):
 
         for class_idx in range(self._known_classes):
             mask = np.where(dummy_targets == class_idx)[0]
+            if len(dummy_data[mask]) < m:
+                dd, dt = dummy_data[mask], dummy_targets[mask]
+            else:
+                dd, dt = dummy_data[mask][:m], dummy_targets[mask][:m]
             dd, dt = dummy_data[mask][:m], dummy_targets[mask][:m]
             self._data_memory = (
                 np.concatenate((self._data_memory, dd))
@@ -272,10 +318,14 @@ class BaseLearner(object):
                     data, i, axis=0
                 )  # Remove it to avoid duplicative selection
 
+                if len(vectors) == 0:
+                    break
+
             # uniques = np.unique(selected_exemplars, axis=0)
             # print('Unique elements: {}'.format(len(uniques)))
             selected_exemplars = np.array(selected_exemplars)
-            exemplar_targets = np.full(m, class_idx)
+            len_selected = len(selected_exemplars)
+            exemplar_targets = np.full(len_selected, class_idx)
             self._data_memory = (
                 np.concatenate((self._data_memory, selected_exemplars))
                 if len(self._data_memory) != 0
@@ -371,8 +421,12 @@ class BaseLearner(object):
                     data, i, axis=0
                 )  # Remove it to avoid duplicative selection
 
+                if len(vectors) == 0:
+                    break
+
             selected_exemplars = np.array(selected_exemplars)
-            exemplar_targets = np.full(m, class_idx)
+            len_selected = len(selected_exemplars)
+            exemplar_targets = np.full(len_selected, class_idx)
             self._data_memory = (
                 np.concatenate((self._data_memory, selected_exemplars))
                 if len(self._data_memory) != 0

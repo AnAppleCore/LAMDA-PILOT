@@ -82,3 +82,16 @@ def split_images_labels(imgs):
         labels.append(item[1])
 
     return np.array(images), np.array(labels)
+
+
+def split_train_val(images:np.ndarray, labels:np.ndarray, val_ratio=0.3, seed=42):
+    # randomly split train and val
+    num_val = int(len(images) * val_ratio)
+    np.random.seed(seed)
+    idx = np.random.permutation(len(images))
+    images_train = images[idx[num_val:]]
+    labels_train = labels[idx[num_val:]]
+    images_val = images[idx[:num_val]]
+    labels_val = labels[idx[:num_val]]
+
+    return images_train, labels_train, images_val, labels_val

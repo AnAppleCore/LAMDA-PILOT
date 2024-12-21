@@ -1,13 +1,15 @@
 import logging
+
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR224, iImageNetR,iImageNetA,CUB, objectnet, omnibenchmark, vtab
+
+from utils.data import *
 
 
 class DataManager(object):
-    def __init__(self, dataset_name, shuffle, seed, init_cls, increment, args):
+    def __init__(self, dataset_name, shuffle, seed, init_cls, increment, args:dict):
         self.args = args
         self.dataset_name = dataset_name
         self._setup_data(dataset_name, shuffle, seed)
@@ -145,6 +147,13 @@ class DataManager(object):
         self._test_data, self._test_targets = idata.test_data, idata.test_targets
         self.use_path = idata.use_path
 
+        # Combine data across domains
+        if use_multi_domain_dataset(dataset_name):
+            self._train_data = np.concatenate(self._train_data)
+            self._train_targets = np.concatenate(self._train_targets)
+            self._test_data = np.concatenate(self._test_data)
+            self._test_targets = np.concatenate(self._test_targets)
+
         # Transforms
         self._train_trsf = idata.train_trsf
         self._test_trsf = idata.test_trsf
@@ -237,7 +246,8 @@ def _get_idata(dataset_name, args=None):
         return omnibenchmark()
     elif name == "vtab":
         return vtab()
-
+    elif hasattr(globals(), dataset_name):
+        return globals()[dataset_name]()
     else:
         raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
 
@@ -253,30 +263,9 @@ def pil_loader(path):
         return img.convert("RGB")
 
 
-def accimage_loader(path):
-    """
-    Ref:
-    https://pytorch.org/docs/stable/_modules/torchvision/datasets/folder.html#ImageFolder
-    accimage is an accelerated Image loader and preprocessor leveraging Intel IPP.
-    accimage is available on conda-forge.
-    """
-    import accimage
-
-    try:
-        return accimage.Image(path)
-    except IOError:
-        # Potentially a decoding problem, fall back to PIL.Image
-        return pil_loader(path)
-
-
 def default_loader(path):
     """
     Ref:
     https://pytorch.org/docs/stable/_modules/torchvision/datasets/folder.html#ImageFolder
     """
-    from torchvision import get_image_backend
-
-    if get_image_backend() == "accimage":
-        return accimage_loader(path)
-    else:
-        return pil_loader(path)
+    return pil_loader(path)

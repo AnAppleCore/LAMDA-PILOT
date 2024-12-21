@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import logging
 import math
+from collections import OrderedDict
 from functools import partial
 from timm.models.registry import register_model
 from timm.models.helpers import build_model_with_cfg, resolve_pretrained_cfg, named_apply, adapt_input_conv, checkpoint_seq
@@ -803,6 +804,85 @@ class Block(nn.Module, AdapterMixin):
         )
         return x
 
+
+class LayerScale(nn.Module):
+    def __init__(self, dim, init_values=1e-5, inplace=False):
+        super().__init__()
+        self.inplace = inplace
+        self.gamma = nn.Parameter(init_values * torch.ones(dim))
+
+    def forward(self, x):
+        return x.mul_(self.gamma) if self.inplace else x * self.gamma
+
+class ResPostBlock(nn.Module):
+
+    def __init__(
+            self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0., init_values=None,
+            drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.init_values = init_values
+
+        self.attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.norm1 = norm_layer(dim)
+        self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+        self.mlp = Mlp(in_features=dim, hidden_features=int(dim * mlp_ratio), act_layer=act_layer, drop=drop)
+        self.norm2 = norm_layer(dim)
+        self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+        self.init_weights()
+
+    def init_weights(self):
+        # NOTE this init overrides that base model init with specific changes for the block type
+        if self.init_values is not None:
+            nn.init.constant_(self.norm1.weight, self.init_values)
+            nn.init.constant_(self.norm2.weight, self.init_values)
+
+    def forward(self, x):
+        x = x + self.drop_path1(self.norm1(self.attn(x)))
+        x = x + self.drop_path2(self.norm2(self.mlp(x)))
+        return x
+
+
+class ParallelBlock(nn.Module):
+
+    def __init__(
+            self, dim, num_heads, num_parallel=2, mlp_ratio=4., qkv_bias=False, init_values=None,
+            drop=0., attn_drop=0., drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.num_parallel = num_parallel
+        self.attns = nn.ModuleList()
+        self.ffns = nn.ModuleList()
+        for _ in range(num_parallel):
+            self.attns.append(nn.Sequential(OrderedDict([
+                ('norm', norm_layer(dim)),
+                ('attn', Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)),
+                ('ls', LayerScale(dim, init_values=init_values) if init_values else nn.Identity()),
+                ('drop_path', DropPath(drop_path) if drop_path > 0. else nn.Identity())
+            ])))
+            self.ffns.append(nn.Sequential(OrderedDict([
+                ('norm', norm_layer(dim)),
+                ('mlp', Mlp(dim, hidden_features=int(dim * mlp_ratio), act_layer=act_layer, drop=drop)),
+                ('ls', LayerScale(dim, init_values=init_values) if init_values else nn.Identity()),
+                ('drop_path', DropPath(drop_path) if drop_path > 0. else nn.Identity())
+            ])))
+
+    def _forward_jit(self, x):
+        x = x + torch.stack([attn(x) for attn in self.attns]).sum(dim=0)
+        x = x + torch.stack([ffn(x) for ffn in self.ffns]).sum(dim=0)
+        return x
+
+    @torch.jit.ignore
+    def _forward(self, x):
+        x = x + sum(attn(x) for attn in self.attns)
+        x = x + sum(ffn(x) for ffn in self.ffns)
+        return x
+
+    def forward(self, x):
+        if torch.jit.is_scripting() or torch.jit.is_tracing():
+            return self._forward_jit(x)
+        else:
+            return self._forward(x)
 
 class VisionTransformer(nn.Module):
     """Vision Transformer
